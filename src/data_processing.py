@@ -73,3 +73,46 @@ with open('../data/processed/preprocessor.pkl', 'wb') as f:
     pickle.dump(preprocessor, f)
 
 print("Feature engineering complete. Processed data saved.")
+
+
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+
+# RFM Calculation
+snapshot_date = df['TransactionStartTime'].max() + pd.Timedelta(days=1)
+
+rfm = df.groupby('CustomerId').agg(
+    Recency=('TransactionStartTime', lambda x: (snapshot_date - x.max()).days),
+    Frequency=('TransactionId', 'count'),
+    Monetary=('Amount', 'sum')  # Use Amount (can be negative for credits)
+).reset_index()
+
+# Scale RFM
+scaler_rfm = StandardScaler()
+rfm_scaled = scaler_rfm.fit_transform(rfm[['Recency', 'Frequency', 'Monetary']])
+
+# KMeans clustering (3 clusters)
+kmeans = KMeans(n_clusters=3, random_state=42)
+rfm['cluster'] = kmeans.fit_predict(rfm_scaled)
+
+# Analyze clusters to find high-risk (typically high Recency, low Frequency, low Monetary)
+cluster_summary = rfm.groupby('cluster')[['Recency', 'Frequency', 'Monetary']].mean()
+print("Cluster Summary:\n", cluster_summary)
+
+# Assume cluster with highest Recency & lowest Frequency/Monetary is high-risk (adjust based on print)
+high_risk_cluster = cluster_summary.sort_values(['Recency', 'Frequency'], ascending=[False, True]).index[0]
+
+rfm['is_high_risk'] = (rfm['cluster'] == high_risk_cluster).astype(int)
+
+# Merge target back
+customer_df = customer_df.merge(rfm[['CustomerId', 'is_high_risk']], on='CustomerId', how='left')
+
+# Save full dataset with target
+customer_df.to_csv('../data/processed/customer_with_target.csv', index=False)
+
+with open('../data/processed/rfm_scaler.pkl', 'wb') as f:
+    pickle.dump(scaler_rfm, f)
+with open('../data/processed/kmeans.pkl', 'wb') as f:
+    pickle.dump(kmeans, f)
+
+print("Proxy target created and saved.")
